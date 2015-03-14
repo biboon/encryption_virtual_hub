@@ -5,45 +5,63 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <stdint.h>
 
 #define P 251
 #define G 19
 #define RANDWIDTH 1024
 
-#define BUFSIZE 32
+#define BUFSIZE 64
 
-unsigned int bobKey, aliceKey;
+uint8_t bobKey, aliceKey;
 unsigned int bobSecret, aliceSecret;
 
-//renvoie n^p mod m
-int my_pow_mod (int n, int p, int m) {
-    if (p != 0) {
-        return (n * my_pow_mod(n, p - 1, m)) % m;
-    } else
-        return 1;
+//returns n^p mod m, use non recursive if p is too high
+unsigned int my_pow_mod (unsigned int n, unsigned int p, unsigned int m) {
+    return (p != 0) ? (n * my_pow_mod(n, p - 1, m)) % m : 1;
 }
 
+#if 0
+//Non recursive version 
+unsigned int my_pow_mod (unsigned int n, unsigned int p, unsigned int m) {
+    int i = 0;
+    unsigned int res = 1;
+    for (i = 0; i < p; i++) {
+        res = (res * n) % m;
+    }
+    return res;
+}
+#endif
+
 //Simulation du serveur en local avec plusieures fonctions
-int aliceToBob1() {
+uint8_t aliceToBob1() {
     aliceSecret = rand() % RANDWIDTH + 1;
     return my_pow_mod(G, aliceSecret, P);
 }
 
-int bobToAlice1() {
+uint8_t bobToAlice1() {
     bobSecret = rand() % RANDWIDTH + 1;
-    int A = aliceToBob1();
+    uint8_t A = aliceToBob1();
     bobKey = my_pow_mod(A, bobSecret, P);
     return my_pow_mod(G, bobSecret, P);
 }
 
 void aliceCalcKey() {
-    int B = bobToAlice1();
+    uint8_t B = bobToAlice1();
     aliceKey = my_pow_mod(B, aliceSecret, P);
 }
 
-//mode = 0 -> encryption, sinon decrypt
+//mode = 0 -> encryption, else decrypt, use non recursive if length is too high
+void cipherBlock(uint8_t key, unsigned int mode, uint8_t* in, uint8_t* out, unsigned int length) {
+    if (length != 0) {
+        *out = *in ^ key;
+        cipherBlock((mode == 0) ? *in : *out, mode, in + 1, out + 1, length - 1);
+    }
+    else *out = '\0';
+}
+
 #if 0
-void transform(unsigned int key, unsigned int mode, unsigned char* in, unsigned char* out, int length) {
+void cipherBlock(unsigned int key, unsigned int mode, unsigned char* in, unsigned char* out, int length) {
     int i = 0;
     unsigned int newKey = key;
     while (i < length) {
@@ -55,29 +73,22 @@ void transform(unsigned int key, unsigned int mode, unsigned char* in, unsigned 
 }
 #endif
 
-void transform(unsigned int key, unsigned int mode, unsigned char* in, unsigned char* out, int length) {
-    if (length != 0) {
-        *out = *in ^ key;
-        transform((mode == 0) ? *in : *out, mode, in + 1, out + 1, length - 1);
-    }
-    else *out = '\0';
-}
-
 int main(int argc, char** argv) {
     srand(time(NULL));
     aliceCalcKey();
-    printf("bobKey: %i\n", bobKey);
-    printf("aliceKey: %i\n", aliceKey);
+    printf("bobKey: 0x%x : %i\n", bobKey, bobKey);
+    printf("aliceKey: 0x%x : %i\n", aliceKey, aliceKey);
     printf("bobSecret: %i\n", bobSecret);
     printf("aliceSecret: %i\n", aliceSecret);
     
     printf("\nMessages:\n");
-    unsigned char packet[BUFSIZE] = "Hello World !";
-    unsigned char crypted[BUFSIZE];
-    transform(aliceKey, 0, packet, crypted, 13);
-    printf("aToB> packet: \t%s\t crypted: \t%s\n", packet, crypted);
-    transform(bobKey, 1, crypted, packet, 13);
-    printf("bDec> crypted: \t%s\t packet: \t%s\n", crypted, packet);
+    uint8_t packet[BUFSIZE] = "Hello World !";
+    uint8_t crypted[BUFSIZE];
+    uint8_t decrypted[BUFSIZE];
+    cipherBlock(aliceKey, 0, packet, crypted, 13);
+    printf("Encrypt> packet: \t%s\t crypted: \t%s\n", packet, crypted);
+    cipherBlock(bobKey, 1, crypted, decrypted, 13);
+    printf("Decrypt> crypted: \t%s\t decrypted: \t%s\n", crypted, decrypted);
     
     printf("\nFinished\n");
     return 0;
