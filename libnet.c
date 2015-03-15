@@ -162,18 +162,22 @@ int serverLoop(int ecoute) {
                 status = read_fixed(poll_tab[i].fd, (unsigned char *) &packet_length, sizeof(packet_length));
                 if (status > 0) {
                     unsigned char packet[BUFSIZE];
+                    unsigned char decrypted[BUFSIZE];
+                    unsigned char encrypted[BUFSIZE];
                     int hlength = ntohs(packet_length);
-                    #ifdef DEBUG
-                        fprintf(stderr, "Packet from client %d, length: %d\n", i, hlength);
-                    #endif
                     read_fixed(poll_tab[i].fd, packet, hlength);
+                    #ifdef DEBUG
+                        fprintf(stderr, "Packet received from client %d, length: %d\n", i, hlength);
+                    #endif
+                    cipherBlock(keys[i - 1], 1, packet, decrypted, hlength);
                     for (j = 1; j <= n_clients; j++)
                         if (j != i) { // Resending to other clients
                             #ifdef DEBUG
                                 fprintf(stderr, "Sending packet to client %d (descriptor: %d)\n", j, poll_tab[j].fd);
                             #endif
+                            cipherBlock(keys[j - 1], 0, decrypted, encrypted, hlength);
                             if (write(poll_tab[j].fd, &packet_length, sizeof(packet_length)) == sizeof(packet_length))
-                                write(poll_tab[j].fd, packet, hlength);
+                                write(poll_tab[j].fd, encrypted, hlength);
                         }
                 } else { // Client error, closing
                     close(poll_tab[i].fd);
@@ -238,25 +242,32 @@ int clientLoop(int sock, int iface) {
         
         if ((desc[0].revents & POLLIN) != 0) { // Receiving packet from hub
             unsigned char packet[BUFSIZE];
+            unsigned char decrypted[BUFSIZE];
             uint16_t packet_length;
             status = read_fixed(sock, (unsigned char *) &packet_length, sizeof(packet_length));
-            if (status <= 0) { fprintf(stderr, "Server not responding !\n"); exit(EXIT_FAILURE); }
+            if (status <= 0) { fprintf(stderr, "Server broken !\n"); exit(EXIT_FAILURE); }
             int hlength = ntohs(packet_length);
             status = read_fixed(sock, packet, hlength);
             #ifdef DEBUG
                 fprintf(stderr,"Packet of size %d received from HUB\n", hlength);
             #endif
-            if (status != hlength) fprintf(stderr, "Wrong size packet received !\n");
-            else if (write(iface, packet, hlength) != hlength) {
-                fprintf(stderr, "Failed to write on interface !\n");
+            if (status != hlength) {
+                fprintf(stderr, "Wrong size packet received !\n");
                 exit(EXIT_FAILURE);
+            } else {
+                cipherBlock(key, 1, packet, decrypted, hlength);
+                if (write(iface, decrypted, hlength) != hlength) {
+                    fprintf(stderr, "Failed to write on interface !\n");
+                    exit(EXIT_FAILURE);
+                }
             }
         }
         
         if ((desc[1].revents & POLLIN) != 0) { // receiving packet from interface
             unsigned char packet[BUFSIZE];
+            unsigned char encrypted[BUFSIZE];
             int hlength = read(iface, packet, BUFSIZE);
-            if (hlength <= 0) { fprintf(stderr, "Interface not responding !\n"); exit(EXIT_FAILURE); }
+            if (hlength <= 0) { fprintf(stderr, "Interface broken !\n"); exit(EXIT_FAILURE); }
             #ifdef DEBUG
                 fprintf(stderr,"Packet of size %d received from interface\n", hlength);
             #endif
@@ -264,10 +275,12 @@ int clientLoop(int sock, int iface) {
             if (write(sock, &packet_length, sizeof(packet_length)) != sizeof(packet_length)) {
                 fprintf(stderr,"Failed to write on server !\n");
                 exit(EXIT_FAILURE);
-            }
-            if (write(sock, packet, hlength) != hlength) {
-                fprintf(stderr,"Failed to write on server !\n");
-                exit(EXIT_FAILURE);
+            } else {
+                cipherBlock(key, 0, packet, encrypted, hlength);
+                if (write(sock, encrypted, hlength) != hlength) {
+                    fprintf(stderr,"Failed to write on server !\n");
+                    exit(EXIT_FAILURE);
+                }
             }
         }
     }
