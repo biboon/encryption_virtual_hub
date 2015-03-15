@@ -1,348 +1,331 @@
-/** fichier libnet.c **/
-
-/************************************************************/
-/** Ce fichier contient des fonctions reseau.              **/
-/************************************************************/
-
-/**** Fichiers d'inclusion ****/
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <stddef.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <netdb.h>
-#include <string.h>
-
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/ioctl.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <linux/if.h>
-#include <linux/if_tun.h>
-
+/* This file contains network functions. */
 #include "libnet.h"
 
-/**** Constantes ****/
+/** Socket managing functions **/
+/* Socket to client */
+void socketToClient(int s, char **hote, char **service) {
+    struct sockaddr_storage adresse;
+    socklen_t taille = sizeof adresse;
+    int status;
 
-#define MAX_TAMPON	1024
-#define TAP_PRINCIPAL	"/dev/net/tun"
+    /* Gets address of remote socket */
+    status = getpeername(s, (struct sockaddr *)&adresse, &taille);
+    if (status < 0){ perror("socketToName.getpeername"); exit(EXIT_FAILURE); }
 
-/**** Variables globales *****/
-
-/**** Prototype des fonctions locales *****/
-
-#ifdef DEBUG
-static void afficheAdresse(FILE *flux,void *ip,int type);
-static void afficheAdresseSocket(FILE *flux,struct sockaddr_storage *padresse);
-static void afficheHote(FILE *flux,struct hostent *hote,int type);
-static int configurationSocket(int ds);
-#endif
-
-/**** Fonctions de gestion des sockets ****/
-
-#ifdef DEBUG
-/** Impression d'une adresse generale **/
-
-static void afficheAdresse(FILE *flux,void *ip,int type)
-{
-char adresse[MAX_TAMPON];
-inet_ntop(type,ip,adresse,MAX_TAMPON);
-fprintf(flux,adresse);
-} 
-
-/** Impression d'une adresse de socket **/
-
-static void afficheAdresseSocket(FILE *flux,struct sockaddr_storage *padresse)
-{
-void *ip;
-int port;
-if(padresse->ss_family==AF_INET){
-    struct sockaddr_in *ipv4=(struct sockaddr_in *)padresse;
-    ip=(void *)&ipv4->sin_addr;
-    port=ipv4->sin_port;
-    }
-if(padresse->ss_family==AF_INET6){
-    struct sockaddr_in6 *ipv6=(struct sockaddr_in6 *)padresse;
-    ip=(void *)&ipv6->sin6_addr;
-    port=ipv6->sin6_port;
-    }
-fprintf(flux,"Adresse IP%s : ",padresse->ss_family==AF_INET?"v4":"v6");
-afficheAdresse(flux,ip,padresse->ss_family);
-fprintf(flux,"\nPort de la socket : %d.\n",ntohs(port));
+    /* Gets machine name */
+    *hote = malloc(BUFSIZE);
+    if (*hote == NULL) { perror("socketToClient.malloc"); exit(EXIT_FAILURE); }
+    *service = malloc(BUFSIZE);
+    if (*service == NULL) { perror("socketToClient.malloc"); exit(EXIT_FAILURE); }
+    getnameinfo((struct sockaddr *)&adresse, sizeof adresse, *hote, BUFSIZE, *service, BUFSIZE, 0);
 }
 
-/** Impression des informations d'un hote **/
 
-static void afficheHote(FILE *flux,struct hostent *hote,int type)
-{
-char **params;
+/* Server connection */
+int serverConnection(char *hote, char *service) {
+    struct addrinfo precisions, *resultat;
+    int status;
+    int s;
 
-fprintf(flux,"Nom officiel : '%s'.\n",hote->h_name);
-fprintf(flux,"Surnoms: ");
-for(params=hote->h_aliases;*params!=NULL;params++){
-	fprintf(flux,"%s",*params);
-	if(*(params+1)==NULL) fprintf(flux,",");
-	}
-fprintf(flux,"\n");
-fprintf(flux,"Type des adresses   : %d.\n",hote->h_addrtype);
-fprintf(flux,"Taille des adresses : %d.\n",hote->h_length);
-fprintf(flux,"Adresses: ");
-for(params=hote->h_addr_list;params[0]!=NULL;params++){
-	afficheAdresse(flux,(struct in_addr *)params,type);
-	if((*params+1)!=NULL) fprintf(flux,",");
-	}
-fprintf(flux,"\n");
-}
-#endif
+    /* Creation de l'adresse de socket */
+    memset(&precisions, 0, sizeof precisions);
+    precisions.ai_family = AF_UNSPEC;
+    precisions.ai_socktype = SOCK_STREAM;
+    status = getaddrinfo(hote, service, &precisions, &resultat);
+    if (status < 0) { perror("serverConnection.getaddrinfo"); exit(EXIT_FAILURE); }
 
-/** Cherche l'adresse IP d'un hote (0 sur succes et -1 sinon) **/
+    /* Creation d'une socket */
+    s = socket(resultat->ai_family, resultat->ai_socktype, resultat->ai_protocol);
+    if (s < 0) { perror("serverConnection.socket"); exit(EXIT_FAILURE); }
 
-int nomVersAdresse(char *hote,struct sockaddr_storage *padresse)
-{
+    /* Connection de la socket a l'hote */
+    status = connect(s, resultat->ai_addr, resultat->ai_addrlen);
+    if (status < 0) exit(EXIT_FAILURE);
 
-/* Informations de deverminage */
+    /* Liberation de la structure d'informations */
+    freeaddrinfo(resultat);
 
-#ifdef DEBUG
-fprintf(stderr,"Recherche de \"%s\".\n",hote);
-#endif
-
-/* On regarde s'il s'agit deja d'une adresse IP */
-
-struct sockaddr_in *ipv4_sock=(struct sockaddr_in *)padresse;
-unsigned char *ipv4=(unsigned char *)&ipv4_sock->sin_addr;
-int size=inet_pton(AF_INET,hote,ipv4);
-if(size>0){
-#ifdef DEBUG
-  fprintf(stderr,"Adresse IPv4 : ");
-  int i; for(i=0;i<size;i++) fprintf(stderr,"%02x ",ipv4[i]); fprintf(stderr,"\n");
-#endif
-  padresse->ss_family=AF_INET;
-  return 0;
-  }
-struct sockaddr_in6 *ipv6_sock=(struct sockaddr_in6 *)padresse;
-unsigned char *ipv6=(unsigned char *)&ipv6_sock->sin6_addr;
-size=inet_pton(AF_INET6,hote,ipv6);
-if(size>0){
-#ifdef DEBUG
-  fprintf(stderr,"Adresse IPv6 : ");
-  int i; for(i=0;i<size;i++) fprintf(stderr,"%02x ",ipv6[i]); fprintf(stderr,"\n");
-#endif
-  padresse->ss_family=AF_INET6;
-  return 0;
-  }
-
-/* Sinon on cherche l'adresse via le DNS */
-
-struct hostent *h=gethostbyname2(hote,AF_INET6);
-if(h!=NULL){
-#ifdef DEBUG
-  afficheHote(stderr,h,AF_INET6);
-#endif
-  memcpy(ipv6,h->h_addr_list[0],h->h_length);
-#ifdef DEBUG
-  fprintf(stderr,"Adresse IPv6 : ");
-  int i; for(i=0;i<h->h_length;i++) fprintf(stderr,"%02x ",ipv6[i]); fprintf(stderr,"\n");
-#endif
-  padresse->ss_family=AF_INET6;
-  return 0;
-  }
-h=gethostbyname2(hote,AF_INET);
-if(h!=NULL){
-#ifdef DEBUG
-  afficheHote(stderr,h,AF_INET);
-#endif
-  memcpy(ipv4,h->h_addr_list[0],h->h_length);
-#ifdef DEBUG
-  fprintf(stderr,"Adresse IPv4 : ");
-  int i; for(i=0;i<h->h_length;i++) fprintf(stderr,"%02x ",ipv4[i]); fprintf(stderr,"\n");
-#endif
-  padresse->ss_family=AF_INET;
-  return 0;
-  }
-return -1;
+    return s;
 }
 
-/** Retourne le nom de la machine connectee sur la     **/
-/** socket distante d'un descripteur                   **/
 
-int socketVersNom(int ds,char *nom)
-{
-struct sockaddr_storage adresse;
-struct sockaddr *padresse=(struct sockaddr *)&adresse;
-socklen_t taille=sizeof adresse;
-int statut;
-struct hostent *machine;
+/* Server initialization */
+int serverInitialization(char *service, int connexions) {
+    struct addrinfo precisions, *resultat;
+    int status;
+    int s;
 
-/* Recupere l'adresse de la socket distante */
-statut=getpeername(ds,padresse,&taille);
-if(statut<0){
-    perror("socketVersNom.getpeername");
-    exit(-1);
+    /* Building address structure */
+    memset(&precisions, 0, sizeof precisions);
+    precisions.ai_family = AF_UNSPEC;
+    precisions.ai_socktype = SOCK_STREAM;
+    precisions.ai_flags = AI_PASSIVE;
+    status = getaddrinfo(NULL, service, &precisions, &resultat);
+    if (status < 0){ perror("serverInitialization.getaddrinfo"); exit(EXIT_FAILURE); }
+
+    /* Creating socket */
+    s = socket(resultat->ai_family, resultat->ai_socktype, resultat->ai_protocol);
+    if (s < 0){ perror("serverInitialization.socket"); exit(EXIT_FAILURE); }
+
+    /* Useful options */
+    int vrai = 1;
+    status = setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &vrai, sizeof(vrai));
+    if (status < 0) {
+        perror("serverInitialization.setsockopt (REUSEADDR)");
+        exit(EXIT_FAILURE);
+    }
+    status = setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &vrai, sizeof(vrai));
+    if (status < 0){
+        perror("serverInitialization.setsockopt (NODELAY)");
+        exit(EXIT_FAILURE);
     }
 
-/* Recupere le nom de la machine */
-void *ip;
-int taille_ip;
-int taille_nom;
-if(padresse->sa_family==AF_INET){
-    struct sockaddr_in *ipv4=(struct sockaddr_in *)padresse;
-    ip=(void *)&ipv4->sin_addr;
-    taille_ip=sizeof(ipv4->sin_addr);
-    taille_nom=INET_ADDRSTRLEN;
-    }
-if(padresse->sa_family==AF_INET6){
-    struct sockaddr_in6 *ipv6=(struct sockaddr_in6 *)padresse;
-    ip=(void *)&ipv6->sin6_addr;
-    taille_ip=sizeof(ipv6->sin6_addr);
-    taille_nom=INET6_ADDRSTRLEN;
-    }
-machine=gethostbyaddr(ip,taille_ip,padresse->sa_family);
-if(machine==NULL){
-    inet_ntop(padresse->sa_family,ip,nom,taille_nom);
-    return -1;
-    }
-else{
-    strcpy(nom,machine->h_name);
-    return 0;
-    }
+    /* Socket address specification */
+    status = bind(s, resultat->ai_addr, resultat->ai_addrlen);
+    if (status < 0) exit(EXIT_FAILURE);
+
+    /* Freeing informations structure */
+    freeaddrinfo(resultat);
+
+    /* Size of waiting queue */
+    status = listen(s, connexions);
+    if (status < 0) exit(EXIT_FAILURE);
+
+    return s;
 }
 
-/** Fonction permettant de configurer une socket avec   **/
-/** les options habituelles                             **/
 
-static int configurationSocket(int ds)
-{
-int vrai=1;
-if(setsockopt(ds,SOL_SOCKET,SO_REUSEADDR,&vrai,sizeof(vrai))<0) return -1;
-if(setsockopt(ds,IPPROTO_TCP,TCP_NODELAY,&vrai,sizeof(vrai))<0) return -1;
-return 0;
-}
-
-/** Ouvre une socket sur un hote et un port determine   **/
-/** retourne le descripteur de la socket ou -1 (erreur) **/
-
-int connexionServeur(char *hote,int port)
-{
-int df;
-struct sockaddr_in6 adresse;
-socklen_t taille=sizeof adresse;
-
-/* Creation d'une socket */
-df=socket(PF_INET6,SOCK_STREAM,0);
-if(df<0){
-        perror("connexionServeur.socket");
-        exit(-1);
+/** Main functions **/
+/* Server's client managing function */
+int serverLoop(int ecoute) {
+    /* Initialize the poll structure and variables */
+    struct pollfd poll_tab[MAX_CONNEXIONS + 1];
+    memset(poll_tab, 0, sizeof(poll_tab));
+    int n_clients = 0, timeout = -1; // milliseconds
+    int new_fd, status, i, j;
+    uint8_t keys[MAX_CONNEXIONS];
+    
+    /* Set up the initial listening socket */
+    poll_tab[0].fd = ecoute;
+    poll_tab[0].events = POLLIN;
+    
+    while (1) {
+        status = poll(poll_tab, n_clients + 1, timeout);
+        if (status < 0) { perror("serverLoop.poll"); exit(EXIT_FAILURE); }
+        else if (status == 0) { perror("serverLoop.poll.timeout"); exit(EXIT_FAILURE); }
+        
+        /* New client connecting */
+        if ((poll_tab[0].revents & POLLIN) != 0) {
+            new_fd = accept(ecoute, NULL, NULL);
+            if (n_clients < MAX_CONNEXIONS) {
+                n_clients++;
+                poll_tab[n_clients].fd = new_fd;
+                poll_tab[n_clients].events = POLLIN;
+                #ifdef DEBUG
+                    fprintf(stderr, "New client on socket %d. Clients number: %d\n", new_fd, n_clients);
+                #endif
+    
+                /* Calculating key and sharing with client */
+                // Receive fromClient
+                do {
+                    #ifdef DEBUG
+                        fprintf(stderr, "Waiting for key data from client\n");
+                    #endif
+                    status = poll(poll_tab, n_clients + 1, timeout);
+                    if (status < 0) { perror("serverLoop.poll"); exit(EXIT_FAILURE); }
+                } while ((poll_tab[n_clients].revents & POLLIN) == 0);
+                poll_tab[n_clients].revents = 0; // Pour le do while, necessaire ?
+                uint16_t fromClient;
+                status = read_fixed(poll_tab[n_clients].fd, (unsigned char *) &fromClient, sizeof(uint16_t));
+                if (status != sizeof(uint16_t)) { perror("serverLoop.key.read"); exit(EXIT_FAILURE); }
+                // Send toClient
+                srand(time(NULL));
+                uint16_t secret = rand() % RANDWIDTH + 1;
+                uint16_t toClient = pow_mod(G, secret, P);
+                status = write(poll_tab[n_clients].fd, &toClient, sizeof(uint16_t));
+                if (status != sizeof(uint16_t)) { perror("clientLoop.key.write"); exit(EXIT_FAILURE); }
+                #ifdef DEBUG
+                    fprintf(stderr, "Sent key data to client\n");
+                #endif
+                // Key
+                keys[n_clients - 1] = pow_mod(fromClient, secret, P);
+                #ifdef DEBUG
+                    fprintf(stderr, "Key set: %d\n", keys[n_clients - 1]);
+                #endif
+            }
         }
-
-/* Quelques options sur la socket */
-if(configurationSocket(df)<0){ 
-  perror("connexionServeur.configurationSocket");
-  exit(-1);
-  }
-
-/* Connection de la socket a l'hote */
-adresse.sin6_family=AF_INET6;
-if(nomVersAdresse(hote,(void *)&adresse)<0) return -1;
-adresse.sin6_port=htons(port);
-adresse.sin6_flowinfo=0;
-adresse.sin6_scope_id=0;
-#ifdef DEBUG
-fprintf(stderr,"Connexion a l'adresse TCP :\n");
-afficheAdresseSocket(stderr,(struct sockaddr_storage *)&adresse);
-#endif
-if(connect(df,(struct sockaddr *)&adresse,taille)<0) return(-1);
-else return df;
-}
-
-/** Ouvre une socket en lecture et retourne le numero    **/
-/** du port utilise. La fonction retourne le descripteur **/
-/** de socket ou -1 en cas d'erreur.                     **/
-
-int initialisationServeur(short int *port)
-{
-int df;
-struct sockaddr_in6 adresse;
-socklen_t taille=sizeof adresse;
-int statut;
-
-/* Creation d'une socket */
-df=socket(PF_INET6,SOCK_STREAM,0);
-if(df<0){
-    perror("initialisationServeur.socket");
-    exit(-1);
+        
+        /* Client sending packet */
+        for (i = 1; i <= n_clients; i++) {
+            if ((poll_tab[i].revents & POLLIN) != 0) { // If event detected
+                uint16_t packet_length;
+                status = read_fixed(poll_tab[i].fd, (unsigned char *) &packet_length, sizeof(packet_length));
+                if (status > 0) {
+                    unsigned char packet[BUFSIZE];
+                    int hlength = ntohs(packet_length);
+                    #ifdef DEBUG
+                        fprintf(stderr, "Packet from client %d, length: %d\n", i, hlength);
+                    #endif
+                    read_fixed(poll_tab[i].fd, packet, hlength);
+                    for (j = 1; j <= n_clients; j++)
+                        if (j != i) { // Resending to other clients
+                            #ifdef DEBUG
+                                fprintf(stderr, "Sending packet to client %d (descriptor: %d)\n", j, poll_tab[j].fd);
+                            #endif
+                            if (write(poll_tab[j].fd, &packet_length, sizeof(packet_length)) == sizeof(packet_length))
+                                write(poll_tab[j].fd, packet, hlength);
+                        }
+                } else { // Client error, closing
+                    close(poll_tab[i].fd);
+                    for (j = i; j < n_clients; j++) {
+                        poll_tab[j] = poll_tab[j + 1];
+                        keys[j - 1] = keys[j];
+                    }
+                    n_clients--;
+                    #ifdef DEBUG
+                        fprintf(stderr, "Client %d disconnected. Clients remaining: %d\n", i, n_clients);
+                    #endif
+                    i--;
+                }
+            }
+        }
     }
+    return 0;
+}
 
-/* Quelques options sur la socket */
-if(configurationSocket(df)<0){ 
-  perror("connexionServeur.configurationSocket");
-  exit(-1);
-  }
-
-/* Specification de l'adresse de la socket */
-adresse.sin6_family=AF_INET6;
-adresse.sin6_addr=in6addr_any;
-adresse.sin6_port=htons(*port);
-adresse.sin6_flowinfo=0;
-adresse.sin6_scope_id=0;
-#ifdef DEBUG
-fprintf(stderr,"Adresse TCP demandee :\n");
-afficheAdresseSocket(stderr,(struct sockaddr_storage *)&adresse);
-#endif
-statut=bind(df,(struct sockaddr *)&adresse,taille);
-if(statut<0) return -1;
-
-/* Recuperation du numero du port utilise */
-statut=getsockname(df,(struct sockaddr *)&adresse,&taille);
-if(statut<0){
-    perror("initialisationServeur.getsockname");
-    exit(-1);
+/* Client server communication */
+int clientLoop(int sock, int iface) {
+    /* Variables */
+    int status;
+    /* Initializing structure */
+    struct pollfd desc[2];
+    memset(desc, -1, sizeof(desc));
+    desc[0].fd = sock;
+    desc[0].events = POLLIN;
+    desc[1].fd = iface;
+    desc[1].events = POLLIN;
+    
+    /* Calculating key and sharing with server */
+    // Send toServer
+    srand(time(NULL));
+    uint16_t secret = rand() % RANDWIDTH + 1;
+    uint16_t toServer = pow_mod(G, secret, P);
+    status = write(desc[0].fd, &toServer, sizeof(uint16_t));
+    if (status != sizeof(uint16_t)) { perror("clientLoop.key.write"); exit(EXIT_FAILURE); }
+    #ifdef DEBUG
+        fprintf(stderr, "Sent key data to server\n");
+    #endif
+    // Receive fromServer
+    uint16_t fromServer;
+    do {
+        #ifdef DEBUG
+            fprintf(stderr, "Waiting for key data from hub\n");
+        #endif
+        status = poll(desc, 2, -1);
+        if (status < 0) { perror("clientLoop.poll"); exit(EXIT_FAILURE); }
+    } while ((desc[0].revents & POLLIN) == 0);
+    status = read_fixed(desc[0].fd, (unsigned char *) &fromServer, sizeof(uint16_t));
+    if (status != sizeof(uint16_t)) { perror("clientLoop.key.read"); exit(EXIT_FAILURE); }
+    // Key
+    uint8_t key = pow_mod(fromServer, secret, P);
+    #ifdef DEBUG
+        fprintf(stderr, "Key set: %d\n", key);
+    #endif
+    
+    while (1) {
+        status = poll(desc, 2, -1);
+        if (status < 0) { perror("clientLoop.poll"); exit(EXIT_FAILURE); }
+        
+        if ((desc[0].revents & POLLIN) != 0) { // Receiving packet from hub
+            unsigned char packet[BUFSIZE];
+            uint16_t packet_length;
+            status = read_fixed(sock, (unsigned char *) &packet_length, sizeof(packet_length));
+            if (status <= 0) { fprintf(stderr, "Server not responding !\n"); exit(EXIT_FAILURE); }
+            int hlength = ntohs(packet_length);
+            status = read_fixed(sock, packet, hlength);
+            #ifdef DEBUG
+                fprintf(stderr,"Packet of size %d received from HUB\n", hlength);
+            #endif
+            if (status != hlength) fprintf(stderr, "Wrong size packet received !\n");
+            else if (write(iface, packet, hlength) != hlength) {
+                fprintf(stderr, "Failed to write on interface !\n");
+                exit(EXIT_FAILURE);
+            }
+        }
+        
+        if ((desc[1].revents & POLLIN) != 0) { // receiving packet from interface
+            unsigned char packet[BUFSIZE];
+            int hlength = read(iface, packet, BUFSIZE);
+            if (hlength <= 0) { fprintf(stderr, "Interface not responding !\n"); exit(EXIT_FAILURE); }
+            #ifdef DEBUG
+                fprintf(stderr,"Packet of size %d received from interface\n", hlength);
+            #endif
+            uint16_t packet_length = htons(hlength);
+            if (write(sock, &packet_length, sizeof(packet_length)) != sizeof(packet_length)) {
+                fprintf(stderr,"Failed to write on server !\n");
+                exit(EXIT_FAILURE);
+            }
+            if (write(sock, packet, hlength) != hlength) {
+                fprintf(stderr,"Failed to write on server !\n");
+                exit(EXIT_FAILURE);
+            }
+        }
     }
-*port=ntohs(adresse.sin6_port);
-
-/* Taille de la queue d'attente */
-statut=listen(df,MAX_CONNEXIONS);
-if(statut<0) return -1;
-
-return df;
+    return 0;
 }
 
-/** Lecture d'un tableau d'octets de taille precise **/
-
-int read_fixed(int descripteur,unsigned char *array,int size){
-int bytes=0;
-while(bytes<size){
-  int offset=read(descripteur,array+bytes,size-bytes);
-  if(offset<=0) return -1; else bytes += offset;
-  }
-return bytes;
+/* Reads bytes array of a precise size */
+int read_fixed(int descripteur, unsigned char *array, int size) {
+    int bytes = 0;
+    while (bytes < size) {
+        int offset = read(descripteur, array + bytes, size - bytes);
+        if (offset > 0) bytes += offset; else return -1;
+    }
+    return bytes;
 }
 
-/** Ouverture d'une interface Ethernet virtuelle **/
-
-int creationInterfaceVirtuelle(char *nom)
+/** Virtual interfaces managing functions **/
+/* Opens a new virtual ethernet interface */
+int virtualInterfaceCreation(char *nom)
 {
-struct ifreq interface;
-int fd,erreur;
+    struct ifreq interface;
+    int fd, erreur;
 
-/* Ouverture du peripherique principal */
-if((fd=open(TAP_PRINCIPAL,O_RDWR))<0) return fd;
+    /* opens principal device */
+    if((fd = open(TAP_PRINCIPAL, O_RDWR)) < 0) return fd;
 
-/* Preparation de la structure */
-memset(&interface,0,sizeof(interface));
-interface.ifr_flags=IFF_TAP|IFF_NO_PI;
-if(nom!=NULL) strncpy(interface.ifr_name,nom,IFNAMSIZ);
+    /* Preparation of structure */
+    memset(&interface, 0, sizeof(interface));
+    interface.ifr_flags = IFF_TAP | IFF_NO_PI;
+    if (nom != NULL) strncpy(interface.ifr_name, nom, IFNAMSIZ);
 
-/* Creation de l'interface */
-if((erreur=ioctl(fd,TUNSETIFF,(void *)&interface))<0){ close(fd); return erreur; }
+    /* Creating interface */
+    if((erreur = ioctl(fd, TUNSETIFF, (void *)&interface)) < 0){ close(fd); return erreur; }
 
-/* Recuperation du nom de l'interface */
-if(nom!=NULL) strcpy(nom,interface.ifr_name);
+    /* Get interface name */
+    if (nom != NULL) strcpy(nom, interface.ifr_name);
 
-return fd;
+    return fd;
+}
+
+/** Encryption keys calculus functions **/
+/* Returns n^p mod m */
+uint16_t pow_mod (uint16_t n, uint16_t p, uint16_t m) {
+    int i = 0;
+    uint16_t res = 1;
+    for (i = 0; i < p; i++) res = (res * n) % m;
+    return res;
+}
+
+/* Creates a new encrypted packet using cipher block method, set mode to 0 to encrypt or 1 to decrypt */
+void cipherBlock(uint16_t key, uint16_t mode, unsigned char* in, unsigned char* out, int length) {
+    int i = 0;
+    uint16_t newKey = key;
+    while (i < length) {
+        out[i] = in[i] ^ newKey;
+        if (mode == 0) newKey = out[i];
+        else if (mode == 1) newKey = in[i];
+        i++;
+    }
+    out[i] = '\0';
 }

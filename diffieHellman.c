@@ -1,6 +1,6 @@
 /*
- * http://fr.wikipedia.org/wiki/%C3%89change_de_cl%C3%A9s_Diffie-Hellman
- */
+* http://fr.wikipedia.org/wiki/%C3%89change_de_cl%C3%A9s_Diffie-Hellman
+*/
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,13 +22,11 @@ unsigned int my_pow_mod (unsigned int n, unsigned int p, unsigned int m) {
 }
 
 #if 0
-//Non recursive version 
+//Non recursive version
 unsigned int my_pow_mod (unsigned int n, unsigned int p, unsigned int m) {
     int i = 0;
     unsigned int res = 1;
-    for (i = 0; i < p; i++) {
-        res = (res * n) % m;
-    }
+    for (i = 0; i < p; i++) res = (res * n) % m;
     return res;
 }
 #endif
@@ -51,6 +49,7 @@ void aliceCalcKey() {
     aliceKey = my_pow_mod(B, aliceSecret, P);
 }
 
+#if 0
 //mode = 0 -> encryption, else decrypt, use non recursive if length is too high
 void cipherBlock(uint8_t key, unsigned int mode, uint8_t* in, uint8_t* out, unsigned int length) {
     if (length != 0) {
@@ -59,8 +58,8 @@ void cipherBlock(uint8_t key, unsigned int mode, uint8_t* in, uint8_t* out, unsi
     }
     else *out = '\0';
 }
+#endif
 
-#if 0
 void cipherBlock(unsigned int key, unsigned int mode, unsigned char* in, unsigned char* out, int length) {
     int i = 0;
     unsigned int newKey = key;
@@ -71,7 +70,6 @@ void cipherBlock(unsigned int key, unsigned int mode, unsigned char* in, unsigne
     }
     out[i] = '\0';
 }
-#endif
 
 int main(int argc, char** argv) {
     srand(time(NULL));

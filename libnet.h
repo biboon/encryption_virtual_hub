@@ -1,21 +1,42 @@
-/** fichier libnet.h **/
+/* This file contains descriptions of network functions */
 
-/******************************************************************/
-/** Ce fichier decrit les structures et les constantes utilisees **/
-/** par les fonctions reseau.                                    **/
-/******************************************************************/
+#include <unistd.h>
+#include <string.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <netdb.h>
+#include <netinet/tcp.h>
+#include <poll.h>
 
-/**** Constantes ****/
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <linux/if.h>
+#include <linux/if_tun.h>
 
-/** Nombre maximum de connexions tamponnees pour le serveur **/
+#include <time.h>
 
-#define MAX_CONNEXIONS	32
+/** Constants **/
+#define MAX_CONNEXIONS 32
+#define BUFSIZE 2048
+#define TAP_PRINCIPAL "/dev/net/tun"
 
-/**** Fonctions ****/
+/* Encryption key calculus */
+#define P 251
+#define G 19
+#define RANDWIDTH 1024
 
-int nomVersAdresse(char *hote,struct sockaddr_storage *padresse);
-int socketVersNom(int ds,char *nom);
-int connexionServeur(char *hote,int port);
-int initialisationServeur(short int *port);
-int read_fixed(int descripteur,unsigned char *array,int size);
-int creationInterfaceVirtuelle(char *nom);
+/* Types */
+typedef unsigned char uint8_t;
+
+/** Functions **/
+void socketToClient(int s, char **hote, char **service);
+int serverConnection(char *hote, char *service);
+int serverInitialization(char *service, int connexions);
+int read_fixed(int descripteur, unsigned char *array, int size);
+int virtualInterfaceCreation(char *nom);
+int serverLoop(int ecoute);
+int clientLoop(int sock, int iface);
+uint16_t pow_mod (uint16_t n, uint16_t p, uint16_t m);
+void cipherBlock(uint16_t key, uint16_t mode, unsigned char* in, unsigned char* out, int length);
