@@ -215,6 +215,9 @@ int clientLoop(int sock, int iface) {
         fprintf(stderr, "Sent key data to server\n");
     #endif
     // Receive fromServer
+    #ifdef DEBUG
+        fprintf(stderr, "Waiting for key data from server\n");
+    #endif
     uint16_t fromServer;
     status = read_fixed(desc[0].fd, (unsigned char *) &fromServer, sizeof(uint16_t));
     if (status != sizeof(uint16_t)) { perror("clientLoop.key.read"); exit(EXIT_FAILURE); }
