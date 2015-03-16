@@ -127,14 +127,9 @@ int serverLoop(int ecoute) {
     
                 /* Calculating key and sharing with client */
                 // Receive fromClient
-                do {
-                    #ifdef DEBUG
-                        fprintf(stderr, "Waiting for key data from client\n");
-                    #endif
-                    status = poll(poll_tab, n_clients + 1, timeout);
-                    if (status < 0) { perror("serverLoop.poll"); exit(EXIT_FAILURE); }
-                } while ((poll_tab[n_clients].revents & POLLIN) == 0);
-                poll_tab[n_clients].revents = 0; // Pour le do while, necessaire ?
+                #ifdef DEBUG
+                    fprintf(stderr, "Waiting for key data from client\n");
+                #endif
                 uint16_t fromClient;
                 status = read_fixed(poll_tab[n_clients].fd, (unsigned char *) &fromClient, sizeof(uint16_t));
                 if (status != sizeof(uint16_t)) { perror("serverLoop.key.read"); exit(EXIT_FAILURE); }
@@ -221,13 +216,6 @@ int clientLoop(int sock, int iface) {
     #endif
     // Receive fromServer
     uint16_t fromServer;
-    do {
-        #ifdef DEBUG
-            fprintf(stderr, "Waiting for key data from hub\n");
-        #endif
-        status = poll(desc, 2, -1);
-        if (status < 0) { perror("clientLoop.poll"); exit(EXIT_FAILURE); }
-    } while ((desc[0].revents & POLLIN) == 0);
     status = read_fixed(desc[0].fd, (unsigned char *) &fromServer, sizeof(uint16_t));
     if (status != sizeof(uint16_t)) { perror("clientLoop.key.read"); exit(EXIT_FAILURE); }
     // Key
