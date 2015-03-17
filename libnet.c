@@ -1,4 +1,22 @@
 /* This file contains network functions. */
+
+#include <unistd.h>
+#include <string.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <netdb.h>
+#include <netinet/tcp.h>
+#include <poll.h>
+
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <linux/if.h>
+#include <linux/if_tun.h>
+
+#include <time.h>
+
 #include "libnet.h"
 
 /** Socket managing functions **/
@@ -130,15 +148,15 @@ int serverLoop(int ecoute) {
                 #ifdef DEBUG
                     fprintf(stderr, "Waiting for key data from client\n");
                 #endif
-                uint16_t fromClient;
-                status = read_fixed(poll_tab[n_clients].fd, (unsigned char *) &fromClient, sizeof(uint16_t));
-                if (status != sizeof(uint16_t)) { perror("serverLoop.key.read"); exit(EXIT_FAILURE); }
+                unsigned int fromClient;
+                status = read_fixed(poll_tab[n_clients].fd, (unsigned char *) &fromClient, sizeof(unsigned int));
+                if (status != sizeof(unsigned int)) { perror("serverLoop.key.read"); exit(EXIT_FAILURE); }
                 // Send toClient
                 srand(time(NULL));
-                uint16_t secret = rand() % RANDWIDTH + 1;
-                uint16_t toClient = pow_mod(G, secret, P);
-                status = write(poll_tab[n_clients].fd, &toClient, sizeof(uint16_t));
-                if (status != sizeof(uint16_t)) { perror("clientLoop.key.write"); exit(EXIT_FAILURE); }
+                unsigned int secret = rand() % RANDWIDTH + 1;
+                unsigned int toClient = pow_mod(G, secret, P);
+                status = write(poll_tab[n_clients].fd, &toClient, sizeof(unsigned int));
+                if (status != sizeof(unsigned int)) { perror("clientLoop.key.write"); exit(EXIT_FAILURE); }
                 #ifdef DEBUG
                     fprintf(stderr, "Sent key data to client\n");
                 #endif
@@ -153,7 +171,7 @@ int serverLoop(int ecoute) {
         /* Client sending packet */
         for (i = 1; i <= n_clients; i++) {
             if ((poll_tab[i].revents & POLLIN) != 0) { // If event detected
-                uint16_t packet_length;
+                unsigned int packet_length;
                 status = read_fixed(poll_tab[i].fd, (unsigned char *) &packet_length, sizeof(packet_length));
                 if (status > 0) {
                     unsigned char packet[BUFSIZE];
@@ -207,10 +225,10 @@ int clientLoop(int sock, int iface) {
     /* Calculating key and sharing with server */
     // Send toServer
     srand(time(NULL));
-    uint16_t secret = rand() % RANDWIDTH + 1;
-    uint16_t toServer = pow_mod(G, secret, P);
-    status = write(desc[0].fd, &toServer, sizeof(uint16_t));
-    if (status != sizeof(uint16_t)) { perror("clientLoop.key.write"); exit(EXIT_FAILURE); }
+    unsigned int secret = rand() % RANDWIDTH + 1;
+    unsigned int toServer = pow_mod(G, secret, P);
+    status = write(desc[0].fd, &toServer, sizeof(unsigned int));
+    if (status != sizeof(unsigned int)) { perror("clientLoop.key.write"); exit(EXIT_FAILURE); }
     #ifdef DEBUG
         fprintf(stderr, "Sent key data to server\n");
     #endif
@@ -218,9 +236,9 @@ int clientLoop(int sock, int iface) {
     #ifdef DEBUG
         fprintf(stderr, "Waiting for key data from server\n");
     #endif
-    uint16_t fromServer;
-    status = read_fixed(desc[0].fd, (unsigned char *) &fromServer, sizeof(uint16_t));
-    if (status != sizeof(uint16_t)) { perror("clientLoop.key.read"); exit(EXIT_FAILURE); }
+    unsigned int fromServer;
+    status = read_fixed(desc[0].fd, (unsigned char *) &fromServer, sizeof(unsigned int));
+    if (status != sizeof(unsigned int)) { perror("clientLoop.key.read"); exit(EXIT_FAILURE); }
     // Key
     uint8_t key = pow_mod(fromServer, secret, P);
     #ifdef DEBUG
@@ -234,7 +252,7 @@ int clientLoop(int sock, int iface) {
         if ((desc[0].revents & POLLIN) != 0) { // Receiving packet from hub
             unsigned char packet[BUFSIZE];
             unsigned char decrypted[BUFSIZE];
-            uint16_t packet_length;
+            unsigned int packet_length;
             status = read_fixed(sock, (unsigned char *) &packet_length, sizeof(packet_length));
             if (status <= 0) { fprintf(stderr, "Server broken !\n"); exit(EXIT_FAILURE); }
             int hlength = ntohs(packet_length);
@@ -262,7 +280,7 @@ int clientLoop(int sock, int iface) {
             #ifdef DEBUG
                 fprintf(stderr,"Packet of size %d received from interface\n", hlength);
             #endif
-            uint16_t packet_length = htons(hlength);
+            unsigned int packet_length = htons(hlength);
             if (write(sock, &packet_length, sizeof(packet_length)) != sizeof(packet_length)) {
                 fprintf(stderr,"Failed to write on server !\n");
                 exit(EXIT_FAILURE);
@@ -314,17 +332,17 @@ int virtualInterfaceCreation(char *nom)
 
 /** Encryption keys calculus functions **/
 /* Returns n^p mod m */
-uint16_t pow_mod (uint16_t n, uint16_t p, uint16_t m) {
+unsigned int pow_mod (unsigned int n, unsigned int p, unsigned int m) {
     int i = 0;
-    uint16_t res = 1;
+    unsigned int res = 1;
     for (i = 0; i < p; i++) res = (res * n) % m;
     return res;
 }
 
 /* Creates a new encrypted packet using cipher block method, set mode to 0 to encrypt or 1 to decrypt */
-void cipherBlock(uint16_t key, uint16_t mode, unsigned char* in, unsigned char* out, int length) {
+void cipherBlock(unsigned int key, unsigned int mode, unsigned char* in, unsigned char* out, int length) {
     int i = 0;
-    uint16_t newKey = key;
+    unsigned int newKey = key;
     while (i < length) {
         out[i] = in[i] ^ newKey;
         if (mode == 0) newKey = out[i];

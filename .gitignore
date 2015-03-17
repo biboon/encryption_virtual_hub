@@ -1,2 +1,5 @@
 Sujet.pdf
 rex/*
+*.o
+virtual_hub
+virtual_client
