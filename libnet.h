@@ -1,6 +1,6 @@
 /* This file contains descriptions of network functions */
-#ifndef __LIBNET_H
-#define __LIBNET_H
+#ifndef __LIBNET_H__
+#define __LIBNET_H__
 
 /** Constants **/
 #define MAX_CONNEXIONS 32
